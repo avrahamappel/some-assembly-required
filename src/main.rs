@@ -8,22 +8,22 @@ type Signal = u16;
 
 #[derive(Debug)]
 enum Connection {
-    Name(WireName),
-    Wire(WireRef),
+    Disconnected(WireName),
+    Connected(WireRef),
 }
 
 impl Connection {
     fn get_signal(&self) -> Option<Signal> {
         match self {
-            Self::Name(_) => None,
-            Self::Wire(w) => w.borrow().signal,
+            Self::Disconnected(_) => None,
+            Self::Connected(w) => w.borrow().signal,
         }
     }
 }
 
 impl From<&str> for Connection {
     fn from(name: &str) -> Self {
-        Self::Name(name.into())
+        Self::Disconnected(name.into())
     }
 }
 
@@ -77,8 +77,8 @@ impl Gate {
     fn connect(&mut self, wires: &[WireRef]) {
         fn find_wire(connection: &Connection, wires: &[WireRef]) -> Connection {
             match connection {
-                Connection::Wire(w) => Connection::Wire(w.clone()),
-                Connection::Name(name) => wires
+                Connection::Connected(w) => Connection::Connected(w.clone()),
+                Connection::Disconnected(name) => wires
                     .iter()
                     // try_borrow could fail if it's the current wire (that this gate belongs to)
                     .find(|w| w.try_borrow().map(|w| w.name == *name).unwrap_or(false))
@@ -88,8 +88,8 @@ impl Gate {
                         w
                     })
                     .map(Rc::clone)
-                    .map(Connection::Wire)
-                    .unwrap_or_else(|| Connection::Name(name.clone())),
+                    .map(Connection::Connected)
+                    .unwrap_or_else(|| Connection::Disconnected(name.clone())),
             }
         }
 
@@ -158,15 +158,15 @@ impl Wire {
                 match $input {
                     Input::Signal(s) => format!("signal {}", s),
                     Input::Connection(c) => match c {
-                        Connection::Name(_) => format!("unknown"),
-                        Connection::Wire(w) => format!("'{}'", w.borrow().name),
+                        Connection::Disconnected(name) => format!("disconnected from '{}'", name),
+                        Connection::Connected(w) => format!("connected to '{}'", w.borrow().name),
                     },
                 }
             };
         }
 
         println!(
-            "'{:>2}' is connected to {:>25}, and has {}",
+            "'{:>2}' is {:>50}",
             self.name,
             match &self.gate {
                 Gate::Single(i) => print_input!(i),
