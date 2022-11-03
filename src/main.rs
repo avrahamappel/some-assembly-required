@@ -16,7 +16,7 @@ impl Connection {
     fn get_signal(&self) -> Option<Signal> {
         match self {
             Self::Disconnected(_) => None,
-            Self::Connected(w) => w.borrow().signal,
+            Self::Connected(w) => w.borrow_mut().get_signal(),
         }
     }
 }
@@ -113,6 +113,31 @@ impl Gate {
         }
     }
 
+    fn is_connected(&self) -> bool {
+        use self::Connection::*;
+        use self::Input::*;
+
+        matches!(
+            self,
+            Self::Single(Signal(_))
+                | Self::Single(Connection(Connected(_)))
+                | Self::And(Signal(_), Signal(_))
+                | Self::And(Connection(Connected(_)), Signal(_))
+                | Self::And(Signal(_), Connection(Connected(_)))
+                | Self::And(Connection(Connected(_)), Connection(Connected(_)))
+                | Self::Or(Signal(_), Signal(_))
+                | Self::Or(Connection(Connected(_)), Signal(_))
+                | Self::Or(Signal(_), Connection(Connected(_)))
+                | Self::Or(Connection(Connected(_)), Connection(Connected(_)))
+                | Self::RShift(Signal(_), _)
+                | Self::RShift(Connection(Connected(_)), _)
+                | Self::LShift(Signal(_), _)
+                | Self::LShift(Connection(Connected(_)), _)
+                | Self::Not(Signal(_))
+                | Self::Not(Connection(Connected(_)))
+        )
+    }
+
     fn get_signal(&self) -> Option<Signal> {
         match self {
             Self::Single(s) => s.get_signal(),
@@ -145,13 +170,11 @@ impl Wire {
     }
 
     fn connect(&mut self, wires: &[WireRef]) {
-        if self.signal.is_some() {
+        if self.gate.is_connected() {
             return;
         }
 
         self.gate.connect(wires);
-
-        self.signal = self.gate.get_signal();
 
         macro_rules! print_input {
             ($input:ident) => {
@@ -175,12 +198,37 @@ impl Wire {
                 Gate::RShift(i, s) => format!("{} right-shifted by {}", print_input!(i), s),
                 Gate::LShift(i, s) => format!("{} left-shifted by {}", print_input!(i), s),
                 Gate::Not(i) => format!("NOT {}", print_input!(i)),
-            },
-            match self.signal {
-                Some(s) => format!("signal {}", s),
-                None => "no signal".to_string(),
             }
         );
+    }
+
+    fn get_signal(&mut self) -> Option<Signal> {
+        println!("Getting signal from '{}'", self.name);
+
+        // Cache signal locally
+        let signal = {
+            if self.signal.is_some() {
+                self.signal
+            } else {
+                let signal = self.gate.get_signal();
+                self.signal = signal;
+                signal
+            }
+        };
+
+        println!(
+            "'{}'s signal is {}",
+            self.name,
+            match signal {
+                Some(s) => s.to_string(),
+                None => "-".to_string(),
+            }
+        );
+        signal
+    }
+
+    fn reset(&mut self) {
+        self.signal = None;
     }
 }
 
@@ -202,11 +250,28 @@ impl Circuit {
         Self { wires }
     }
 
+    fn reset(&self) {
+        for wire in &self.wires {
+            wire.borrow_mut().reset();
+        }
+    }
+
     fn get(&self, name: &str) -> Option<Signal> {
         self.wires
             .iter()
             .find(|w| w.borrow().name == name.into())
-            .and_then(|w| w.borrow().signal)
+            .map(Rc::clone)
+            .and_then(|w| w.borrow_mut().get_signal())
+    }
+
+    fn set(&self, name: &str, signal: Signal) {
+        self.reset();
+        self.wires
+            .iter()
+            .find(|w| w.borrow().name == name.into())
+            .unwrap()
+            .borrow_mut()
+            .gate = Gate::Single(Input::Signal(signal));
     }
 }
 
@@ -240,10 +305,14 @@ y: 456";
             .wires
             .iter()
             .map(|w| {
+                let mut w = w.borrow_mut();
+                let name = Rc::clone(&w.name);
+                let signal = w.get_signal();
+
                 format!(
                     "{}: {}",
-                    w.borrow().name,
-                    match w.borrow().signal {
+                    name,
+                    match signal {
                         None => String::new(),
                         Some(s) => s.to_string(),
                     }
@@ -263,5 +332,14 @@ fn main() {
         .map(|s| Wire::parse(&s));
     let circuit = Circuit::assemble(w_iter);
 
-    println!("CIRCUIT 'a': {}", circuit.get("a").unwrap());
+    let signal = circuit.get("a").unwrap();
+
+    println!("CIRCUIT 'a' originally: {}", signal);
+
+    circuit.set("b", signal);
+
+    println!(
+        "CIRCUIT 'a' after using first value for 'b': {}",
+        circuit.get("a").unwrap()
+    );
 }
